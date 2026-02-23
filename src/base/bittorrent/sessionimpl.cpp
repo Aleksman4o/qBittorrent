@@ -268,6 +268,23 @@ namespace
     template <typename T>
     LowerLimited<T> lowerLimited(T limit) { return LowerLimited<T>(limit); }
 
+    DiskIOType normalizeDiskIOType(const DiskIOType type)
+    {
+        switch (type)
+        {
+        case DiskIOType::Default:
+        case DiskIOType::MMap:
+        case DiskIOType::Posix:
+        case DiskIOType::SimplePreadPwrite:
+#ifdef QBT_USES_LIBTORRENT_PREAD_DISK_IO
+        case DiskIOType::Pread:
+#endif
+            return type;
+        }
+
+        return DiskIOType::Default;
+    }
+
     template <typename T>
     LowerLimited<T> lowerLimited(T limit, T ret) { return LowerLimited<T>(limit, ret); }
 
@@ -456,7 +473,7 @@ SessionImpl::SessionImpl(QObject *parent)
     , m_diskCacheSize(BITTORRENT_SESSION_KEY(u"DiskCacheSize"_s), -1)
     , m_diskCacheTTL(BITTORRENT_SESSION_KEY(u"DiskCacheTTL"_s), 60)
     , m_diskQueueSize(BITTORRENT_SESSION_KEY(u"DiskQueueSize"_s), (1024 * 1024))
-    , m_diskIOType(BITTORRENT_SESSION_KEY(u"DiskIOType"_s), DiskIOType::Default)
+    , m_diskIOType(BITTORRENT_SESSION_KEY(u"DiskIOType"_s), DiskIOType::Default, normalizeDiskIOType)
     , m_diskIOReadMode(BITTORRENT_SESSION_KEY(u"DiskIOReadMode"_s), DiskIOReadMode::EnableOSCache)
     , m_diskIOWriteMode(BITTORRENT_SESSION_KEY(u"DiskIOWriteMode"_s), DiskIOWriteMode::EnableOSCache)
 #ifdef Q_OS_WIN
@@ -1751,6 +1768,11 @@ void SessionImpl::initializeNativeSession()
     case DiskIOType::Posix:
         sessionParams.disk_io_constructor = customPosixDiskIOConstructor;
         break;
+#ifdef QBT_USES_LIBTORRENT_PREAD_DISK_IO
+    case DiskIOType::Pread:
+        sessionParams.disk_io_constructor = customPreadDiskIOConstructor;
+        break;
+#endif
     case DiskIOType::MMap:
     case DiskIOType::SimplePreadPwrite:
         sessionParams.disk_io_constructor = customMMapDiskIOConstructor;
@@ -4431,9 +4453,10 @@ DiskIOType SessionImpl::diskIOType() const
 
 void SessionImpl::setDiskIOType(const DiskIOType type)
 {
-    if (type != m_diskIOType)
+    const DiskIOType normalizedType = normalizeDiskIOType(type);
+    if (normalizedType != m_diskIOType)
     {
-        m_diskIOType = type;
+        m_diskIOType = normalizedType;
     }
 }
 

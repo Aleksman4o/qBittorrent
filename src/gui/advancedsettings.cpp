@@ -599,7 +599,11 @@ void AdvancedSettings::loadAdvancedSettings()
     m_comboBoxDiskIOType.addItem(tr("Memory mapped files"), QVariant::fromValue(BitTorrent::DiskIOType::MMap));
     m_comboBoxDiskIOType.addItem(tr("POSIX-compliant"), QVariant::fromValue(BitTorrent::DiskIOType::Posix));
     m_comboBoxDiskIOType.addItem(tr("Simple pread/pwrite"), QVariant::fromValue(BitTorrent::DiskIOType::SimplePreadPwrite));
-    m_comboBoxDiskIOType.setCurrentIndex(m_comboBoxDiskIOType.findData(QVariant::fromValue(session->diskIOType())));
+#ifdef QBT_USES_LIBTORRENT_PREAD_DISK_IO
+    m_comboBoxDiskIOType.addItem(tr("Multi-threaded pread/pwrite (experimental)"), QVariant::fromValue(BitTorrent::DiskIOType::Pread));
+#endif
+    const int diskIOTypeIndex = m_comboBoxDiskIOType.findData(QVariant::fromValue(session->diskIOType()));
+    m_comboBoxDiskIOType.setCurrentIndex((diskIOTypeIndex >= 0) ? diskIOTypeIndex : 0);
     addRow(DISK_IO_TYPE, tr("Disk IO type (requires restart)") + u' ' + makeLink(u"https://www.libtorrent.org/single-page-ref.html#default-disk-io-constructor", u"(?)")
            , &m_comboBoxDiskIOType);
 #endif

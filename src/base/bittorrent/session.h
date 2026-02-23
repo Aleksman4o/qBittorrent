@@ -32,6 +32,7 @@
 #include <QtContainerFwd>
 #include <QObject>
 
+#include "libtorrentcompat.h"
 #include "base/pathfwd.h"
 #include "base/tagset.h"
 #include "addtorrenterror.h"
@@ -94,7 +95,10 @@ namespace BitTorrent
             Default = 0,
             MMap = 1,
             Posix = 2,
-            SimplePreadPwrite = 3
+            SimplePreadPwrite = 3,
+#ifdef QBT_USES_LIBTORRENT_PREAD_DISK_IO
+            Pread = 4
+#endif
         };
         Q_ENUM_NS(DiskIOType)
 

@@ -1462,6 +1462,7 @@ Use ';' to split multiple entries. Can use wildcard '*'.)QBT_TR[CONTEXT=OptionsD
                             <option value="1">QBT_TR(Memory mapped files)QBT_TR[CONTEXT=OptionsDialog]</option>
                             <option value="2">QBT_TR(POSIX-compliant)QBT_TR[CONTEXT=OptionsDialog]</option>
                             <option value="3">QBT_TR(Simple pread/pwrite)QBT_TR[CONTEXT=OptionsDialog]</option>
+                            <option value="4" id="diskIOTypePreadDiskIO">QBT_TR(Multi-threaded pread/pwrite (experimental))QBT_TR[CONTEXT=OptionsDialog]</option>
                         </select>
                     </td>
                 </tr>
@@ -2706,7 +2707,11 @@ Use ';' to split multiple entries. Can use wildcard '*'.)QBT_TR[CONTEXT=OptionsD
                     document.getElementById("diskCache").value = pref.disk_cache;
                     document.getElementById("diskCacheExpiryInterval").value = pref.disk_cache_ttl;
                     document.getElementById("diskQueueSize").value = (pref.disk_queue_size / 1024);
-                    document.getElementById("diskIOType").value = pref.disk_io_type;
+                    const buildInfo = window.qBittorrent.Cache.buildInfo.get();
+                    const hasPreadDiskIO = (buildInfo.libtorrent_pread_disk_io === true);
+                    document.getElementById("diskIOType").value = ((pref.disk_io_type === 4) && !hasPreadDiskIO)
+                        ? 0
+                        : pref.disk_io_type;
                     document.getElementById("diskIOReadMode").value = pref.disk_io_read_mode;
                     document.getElementById("diskIOWriteMode").value = pref.disk_io_write_mode;
                     document.getElementById("coalesceReadsAndWrites").checked = pref.enable_coalesce_read_write;
@@ -3306,6 +3311,8 @@ Use ';' to split multiple entries. Can use wildcard '*'.)QBT_TR[CONTEXT=OptionsD
                     document.getElementById("rowDiskCache").style.display = "none";
                     document.getElementById("rowDiskCacheExpiryInterval").style.display = "none";
                     document.getElementById("rowCoalesceReadsAndWrites").style.display = "none";
+                    if (buildInfo.libtorrent_pread_disk_io !== true)
+                        document.getElementById("diskIOTypePreadDiskIO").style.display = "none";
                 }
                 else {
                     document.getElementById("fieldsetI2p").style.display = "none";

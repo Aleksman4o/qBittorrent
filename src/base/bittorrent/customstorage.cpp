@@ -36,6 +36,9 @@
 #ifdef QBT_USES_LIBTORRENT2
 #include <libtorrent/mmap_disk_io.hpp>
 #include <libtorrent/posix_disk_io.hpp>
+#ifdef QBT_USES_LIBTORRENT_PREAD_DISK_IO
+#include <libtorrent/pread_disk_io.hpp>
+#endif
 #include <libtorrent/session.hpp>
 
 std::unique_ptr<lt::disk_interface> customDiskIOConstructor(
@@ -55,6 +58,14 @@ std::unique_ptr<lt::disk_interface> customMMapDiskIOConstructor(
 {
     return std::make_unique<CustomDiskIOThread>(lt::mmap_disk_io_constructor(ioContext, settings, counters));
 }
+
+#ifdef QBT_USES_LIBTORRENT_PREAD_DISK_IO
+std::unique_ptr<lt::disk_interface> customPreadDiskIOConstructor(
+        lt::io_context &ioContext, const lt::settings_interface &settings, lt::counters &counters)
+{
+    return std::make_unique<CustomDiskIOThread>(lt::pread_disk_io_constructor(ioContext, settings, counters));
+}
+#endif
 
 CustomDiskIOThread::CustomDiskIOThread(std::unique_ptr<libtorrent::disk_interface> nativeDiskIOThread)
     : m_nativeDiskIO {std::move(nativeDiskIOThread)}

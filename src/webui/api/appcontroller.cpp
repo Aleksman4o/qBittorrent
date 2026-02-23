@@ -116,7 +116,12 @@ void AppController::buildInfoAction()
         {u"openssl"_s, Utils::Misc::opensslVersionString()},
         {u"zlib"_s, Utils::Misc::zlibVersionString()},
         {u"bitness"_s, (QT_POINTER_SIZE * 8)},
-        {u"platform"_s, platformName}
+        {u"platform"_s, platformName},
+#ifdef QBT_USES_LIBTORRENT_PREAD_DISK_IO
+        {u"libtorrent_pread_disk_io"_s, true}
+#else
+        {u"libtorrent_pread_disk_io"_s, false}
+#endif
     };
     setResult(versions);
 }

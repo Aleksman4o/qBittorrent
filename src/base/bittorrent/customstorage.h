@@ -33,6 +33,7 @@
 
 #include <QString>
 
+#include "libtorrentcompat.h"
 #include "base/path.h"
 
 #ifdef QBT_USES_LIBTORRENT2
@@ -52,6 +53,10 @@ std::unique_ptr<lt::disk_interface> customPosixDiskIOConstructor(
         lt::io_context &ioContext, lt::settings_interface const &settings, lt::counters &counters);
 std::unique_ptr<lt::disk_interface> customMMapDiskIOConstructor(
         lt::io_context &ioContext, lt::settings_interface const &settings, lt::counters &counters);
+#ifdef QBT_USES_LIBTORRENT_PREAD_DISK_IO
+std::unique_ptr<lt::disk_interface> customPreadDiskIOConstructor(
+        lt::io_context &ioContext, lt::settings_interface const &settings, lt::counters &counters);
+#endif
 
 class CustomDiskIOThread final : public lt::disk_interface
 {
