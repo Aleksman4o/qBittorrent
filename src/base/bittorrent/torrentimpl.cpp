@@ -90,6 +90,36 @@ using namespace BitTorrent;
 
 namespace
 {
+    const lt::file_storage &nativeFileStorage(const lt::torrent_info &torrentInfo)
+    {
+#if LIBTORRENT_VERSION_NUM >= 20100
+        return torrentInfo.layout();
+#elif defined(QBT_USES_LIBTORRENT2)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+        return torrentInfo.orig_files();
+#pragma GCC diagnostic pop
+#else
+        return torrentInfo.files();
+#endif
+    }
+
+    const lt::file_storage &getActualFileStorage(const lt::torrent_info &torrentInfo)
+    {
+#if LIBTORRENT_VERSION_NUM >= 20100
+#if TORRENT_ABI_VERSION < 4
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+        return torrentInfo.files_impl();
+#pragma GCC diagnostic pop
+#else
+        return torrentInfo.layout();
+#endif
+#else
+        return nativeFileStorage(torrentInfo);
+#endif
+    }
+
     lt::announce_entry makeNativeAnnounceEntry(const QString &url, const int tier)
     {
         lt::announce_entry entry {url.toStdString()};
@@ -372,7 +402,10 @@ TorrentImpl::TorrentImpl(SessionImpl *session, const lt::torrent_handle &nativeH
                     ? makeUserPath(Path(fileIter->second)) : m_torrentInfo.filePath(i));
             m_filePaths.append(filePath);
 
-            const auto priority = LT::fromNative(filePriorities[LT::toUnderlyingType(nativeIndex)]);
+            const int nativeIndexValue = LT::toUnderlyingType(nativeIndex);
+            const auto priority = ((nativeIndexValue >= 0) && (nativeIndexValue < static_cast<int>(filePriorities.size())))
+                    ? LT::fromNative(filePriorities[nativeIndexValue])
+                    : DownloadPriority::Normal;
             m_filePriorities.append(priority);
         }
     }
@@ -1087,7 +1120,14 @@ Path TorrentImpl::actualFilePath(const int index) const
     if ((index < 0) || (index >= nativeIndexes.size()))
         return {};
 
-    return Path(nativeTorrentInfo()->files().file_path(nativeIndexes[index]));
+    const lt::file_index_t nativeIndex = nativeIndexes[index];
+    if (const auto it = m_ltAddTorrentParams.renamed_files.find(nativeIndex)
+            ; it != m_ltAddTorrentParams.renamed_files.cend())
+    {
+        return Path(it->second);
+    }
+
+    return Path(getActualFileStorage(*nativeTorrentInfo()).file_path(nativeIndex));
 }
 
 qlonglong TorrentImpl::fileSize(const int index) const
@@ -1108,9 +1148,19 @@ PathList TorrentImpl::actualFilePaths() const
     PathList paths;
     paths.reserve(filesCount());
 
-    const lt::file_storage files = nativeTorrentInfo()->files();
+    const lt::file_storage files = getActualFileStorage(*nativeTorrentInfo());
     for (const lt::file_index_t &nativeIndex : asConst(m_torrentInfo.nativeIndexes()))
-        paths.emplaceBack(files.file_path(nativeIndex));
+    {
+        if (const auto it = m_ltAddTorrentParams.renamed_files.find(nativeIndex)
+                ; it != m_ltAddTorrentParams.renamed_files.cend())
+        {
+            paths.emplaceBack(it->second);
+        }
+        else
+        {
+            paths.emplaceBack(files.file_path(nativeIndex));
+        }
+    }
 
     return paths;
 }
@@ -1857,7 +1907,7 @@ void TorrentImpl::endReceivedMetadataHandling(const Path &savePath, const PathLi
     m_torrentInfo = TorrentInfo(*metadata);
     m_filePriorities.reserve(filesCount());
     const auto nativeIndexes = m_torrentInfo.nativeIndexes();
-    p.file_priorities = resized(p.file_priorities, metadata->files().num_files()
+    p.file_priorities = resized(p.file_priorities, nativeFileStorage(*metadata).num_files()
             , LT::toNative(p.file_priorities.empty() ? DownloadPriority::Normal : DownloadPriority::Ignored));
 
     m_completedFiles.fill(static_cast<bool>(p.flags & lt::torrent_flags::seed_mode), filesCount());
@@ -1867,6 +1917,7 @@ void TorrentImpl::endReceivedMetadataHandling(const Path &savePath, const PathLi
     for (qsizetype i = 0; i < fileNames.size(); ++i)
     {
         const auto nativeIndex = nativeIndexes.at(i);
+        const int nativeIndexValue = LT::toUnderlyingType(nativeIndex);
 
         const Path &actualFilePath = fileNames.at(i);
         p.renamed_files[nativeIndex] = actualFilePath.toString().toStdString();
@@ -1874,12 +1925,19 @@ void TorrentImpl::endReceivedMetadataHandling(const Path &savePath, const PathLi
         const Path filePath = actualFilePath.removedExtension(QB_EXT);
         m_filePaths.append(filePath);
 
-        m_filePriorities.append(LT::fromNative(p.file_priorities[LT::toUnderlyingType(nativeIndex)]));
+        const auto priority = ((nativeIndexValue >= 0) && (nativeIndexValue < static_cast<int>(p.file_priorities.size())))
+                ? LT::fromNative(p.file_priorities[nativeIndexValue])
+                : DownloadPriority::Normal;
+        m_filePriorities.append(priority);
     }
 
     m_session->applyFilenameFilter(m_filePaths, m_filePriorities);
     for (qsizetype i = 0; i < m_filePriorities.size(); ++i)
-        p.file_priorities[LT::toUnderlyingType(nativeIndexes[i])] = LT::toNative(m_filePriorities[i]);
+    {
+        const int nativeIndexValue = LT::toUnderlyingType(nativeIndexes[i]);
+        if ((nativeIndexValue >= 0) && (nativeIndexValue < static_cast<int>(p.file_priorities.size())))
+            p.file_priorities[nativeIndexValue] = LT::toNative(m_filePriorities[i]);
+    }
 
     p.save_path = savePath.toString().toStdString();
     p.ti = metadata;
@@ -1913,9 +1971,15 @@ void TorrentImpl::reload()
     try
     {
         lt::add_torrent_params p = m_ltAddTorrentParams;
+#if LIBTORRENT_VERSION_NUM >= 20100
+        p.flags |= lt::torrent_flags::update_subscribe
+                | lt::torrent_flags::deprecated_override_trackers
+                | lt::torrent_flags::deprecated_override_web_seeds;
+#else
         p.flags |= lt::torrent_flags::update_subscribe
                 | lt::torrent_flags::override_trackers
                 | lt::torrent_flags::override_web_seeds;
+#endif
 
         if (m_isStopped)
         {
@@ -2359,6 +2423,8 @@ void TorrentImpl::handleFileRenamed(const lt::file_index_t nativeFileIndex, cons
         }
     }
 
+    m_ltAddTorrentParams.renamed_files[nativeFileIndex] = newActualFilePath.toString().toStdString();
+
     --m_renameCount;
     while (!isMoveInProgress() && (m_renameCount == 0) && !m_moveFinishedTriggers.isEmpty())
         m_moveFinishedTriggers.takeFirst()();
@@ -2453,15 +2519,10 @@ void TorrentImpl::handleUnwantedFolderToggled()
 
 void TorrentImpl::manageActualFilePaths()
 {
-    const std::shared_ptr<const lt::torrent_info> nativeInfo = nativeTorrentInfo();
-    const lt::file_storage &nativeFiles = nativeInfo->files();
-
     for (int i = 0; i < filesCount(); ++i)
     {
         const Path path = filePath(i);
-
-        const auto nativeIndex = m_torrentInfo.nativeIndexes().at(i);
-        const Path actualPath {nativeFiles.file_path(nativeIndex)};
+        const Path actualPath = actualFilePath(i);
         const Path targetActualPath = makeActualPath(i, path);
         if (actualPath != targetActualPath)
         {
@@ -2998,7 +3059,7 @@ void TorrentImpl::prioritizeFiles(const QList<DownloadPriority> &priorities)
         }
     }
 
-    const int internalFilesCount = m_torrentInfo.nativeInfo()->files().num_files(); // including .pad files
+    const int internalFilesCount = nativeFileStorage(*m_torrentInfo.nativeInfo()).num_files(); // including .pad files
     auto nativePriorities = std::vector<lt::download_priority_t>(internalFilesCount, LT::toNative(DownloadPriority::Normal));
     const auto nativeIndexes = m_torrentInfo.nativeIndexes();
     for (qsizetype i = 0; i < priorities.size(); ++i)

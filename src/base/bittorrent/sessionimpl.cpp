@@ -57,6 +57,7 @@
 #include <libtorrent/session_stats.hpp>
 #include <libtorrent/session_status.hpp>
 #include <libtorrent/torrent_info.hpp>
+#include <libtorrent/version.hpp>
 
 #include <QDateTime>
 #include <QDeadlineTimer>
@@ -127,6 +128,20 @@ namespace
     const char PEER_ID[] = "qB";
     const auto USER_AGENT = QStringLiteral("qBittorrent/" QBT_VERSION_2);
     const QString DEFAULT_DHT_BOOTSTRAP_NODES = u"dht.libtorrent.org:25401, dht.transmissionbt.com:6881, router.bittorrent.com:6881"_s;
+
+    const lt::file_storage &nativeFileStorage(const lt::torrent_info &torrentInfo)
+    {
+#if LIBTORRENT_VERSION_NUM >= 20100
+        return torrentInfo.layout();
+#elif defined(QBT_USES_LIBTORRENT2)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+        return torrentInfo.orig_files();
+#pragma GCC diagnostic pop
+#else
+        return torrentInfo.files();
+#endif
+    }
 
     void torrentQueuePositionUp(const lt::torrent_handle &handle)
     {
@@ -2877,14 +2892,18 @@ bool SessionImpl::addTorrent_impl(const TorrentDescriptor &source, const AddTorr
         if (!loadTorrentParams.hasFinishedStatus)
             needFindIncompleteFiles = true;
 
-        const int internalFilesCount = torrentInfo.nativeInfo()->files().num_files(); // including .pad files
+        const int internalFilesCount = nativeFileStorage(*torrentInfo.nativeInfo()).num_files(); // including .pad files
         // Use qBittorrent default priority rather than libtorrent's (4)
         p.file_priorities = std::vector(internalFilesCount, LT::toNative(DownloadPriority::Normal));
 
         if (!filePriorities.isEmpty())
         {
             for (qsizetype i = 0; i < filePriorities.size(); ++i)
-                p.file_priorities[LT::toUnderlyingType(nativeIndexes[i])] = LT::toNative(filePriorities[i]);
+            {
+                const int nativeIndexValue = LT::toUnderlyingType(nativeIndexes[i]);
+                if ((nativeIndexValue >= 0) && (nativeIndexValue < static_cast<int>(p.file_priorities.size())))
+                    p.file_priorities[nativeIndexValue] = LT::toNative(filePriorities[i]);
+            }
         }
 
         Q_ASSERT(p.ti);
