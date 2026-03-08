@@ -161,13 +161,22 @@ catch (const lt::system_error &err)
 BitTorrent::TorrentDescriptor::TorrentDescriptor(lt::add_torrent_params ltAddTorrentParams)
     : m_ltAddTorrentParams {std::move(ltAddTorrentParams)}
 {
+#if LIBTORRENT_VERSION_NUM >= 20100
+    if (m_ltAddTorrentParams.creation_date > 0)
+        m_creationDate = QDateTime::fromSecsSinceEpoch(m_ltAddTorrentParams.creation_date);
+    m_creator = QString::fromStdString(m_ltAddTorrentParams.created_by);
+    m_comment = QString::fromStdString(m_ltAddTorrentParams.comment);
+#endif
+
     if (m_ltAddTorrentParams.ti && m_ltAddTorrentParams.ti->is_valid())
     {
         m_info.emplace(*m_ltAddTorrentParams.ti);
+#if LIBTORRENT_VERSION_NUM < 20100
         if (m_ltAddTorrentParams.ti->creation_date() > 0)
             m_creationDate = QDateTime::fromSecsSinceEpoch(m_ltAddTorrentParams.ti->creation_date());
         m_creator = QString::fromStdString(m_ltAddTorrentParams.ti->creator());
         m_comment = QString::fromStdString(m_ltAddTorrentParams.ti->comment());
+#endif
     }
 }
 

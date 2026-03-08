@@ -32,6 +32,7 @@
 #include <libtorrent/entry.hpp>
 #include <libtorrent/read_resume_data.hpp>
 #include <libtorrent/torrent_info.hpp>
+#include <libtorrent/version.hpp>
 #include <libtorrent/write_resume_data.hpp>
 
 #include <QByteArray>
@@ -88,6 +89,29 @@ namespace
     {
         return {str.data(), static_cast<qsizetype>(str.size())};
     }
+
+#if LIBTORRENT_VERSION_NUM >= 20100
+    void loadTorrentMetadata(lt::add_torrent_params &params, const lt::bdecode_node &metadataRoot)
+    {
+        if (const lt::bdecode_node creationDateNode = metadataRoot.dict_find("creation date")
+                ; creationDateNode.type() == lt::bdecode_node::int_t)
+        {
+            params.creation_date = static_cast<decltype(params.creation_date)>(creationDateNode.int_value());
+        }
+
+        if (const lt::bdecode_node createdByNode = metadataRoot.dict_find("created by")
+                ; createdByNode.type() == lt::bdecode_node::string_t)
+        {
+            params.created_by = std::string(createdByNode.string_value());
+        }
+
+        if (const lt::bdecode_node commentNode = metadataRoot.dict_find("comment")
+                ; commentNode.type() == lt::bdecode_node::string_t)
+        {
+            params.comment = std::string(commentNode.string_value());
+        }
+    }
+#endif
 
     using ListType = lt::entry::list_type;
 
@@ -318,6 +342,9 @@ BitTorrent::LoadResumeDataResult BitTorrent::BencodeResumeDataStorage::loadTorre
             return nonstd::make_unexpected(tr("Cannot parse torrent info: %1").arg(QString::fromStdString(ec.message())));
 
         p.ti = torrentInfo;
+#if LIBTORRENT_VERSION_NUM >= 20100
+        loadTorrentMetadata(p, torrentInfoRoot);
+#endif
 
 #ifdef QBT_USES_LIBTORRENT2
         if (((p.info_hashes.has_v1() && (p.info_hashes.v1 != p.ti->info_hashes().v1))

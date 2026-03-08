@@ -37,6 +37,7 @@
 #include <libtorrent/entry.hpp>
 #include <libtorrent/read_resume_data.hpp>
 #include <libtorrent/torrent_info.hpp>
+#include <libtorrent/version.hpp>
 #include <libtorrent/write_resume_data.hpp>
 
 #include <QByteArray>
@@ -156,6 +157,29 @@ namespace
     {
         return QString::fromUtf8(str.data(), static_cast<qsizetype>(str.size()));
     }
+
+#if LIBTORRENT_VERSION_NUM >= 20100
+    void loadTorrentMetadata(lt::add_torrent_params &params, const lt::bdecode_node &metadataRoot)
+    {
+        if (const lt::bdecode_node creationDateNode = metadataRoot.dict_find("creation date")
+                ; creationDateNode.type() == lt::bdecode_node::int_t)
+        {
+            params.creation_date = static_cast<decltype(params.creation_date)>(creationDateNode.int_value());
+        }
+
+        if (const lt::bdecode_node createdByNode = metadataRoot.dict_find("created by")
+                ; createdByNode.type() == lt::bdecode_node::string_t)
+        {
+            params.created_by = std::string(createdByNode.string_value());
+        }
+
+        if (const lt::bdecode_node commentNode = metadataRoot.dict_find("comment")
+                ; commentNode.type() == lt::bdecode_node::string_t)
+        {
+            params.comment = std::string(commentNode.string_value());
+        }
+    }
+#endif
 
     QString quoted(const QString &name)
     {
@@ -688,6 +712,10 @@ LoadResumeDataResult DBResumeDataStorage::parseQueryResultRow(const QSqlQuery &q
         p.ti = std::make_shared<lt::torrent_info>(torrentInfoRoot, ec);
         if (ec)
             return nonstd::make_unexpected(tr("Cannot parse torrent info: %1").arg(QString::fromStdString(ec.message())));
+
+#if LIBTORRENT_VERSION_NUM >= 20100
+        loadTorrentMetadata(p, torrentInfoRoot);
+#endif
     }
 
     p.save_path = Profile::instance()->fromPortablePath(Path(fromLTString(p.save_path)))

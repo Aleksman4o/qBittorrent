@@ -40,6 +40,7 @@
 #include <libtorrent/session.hpp>
 #include <libtorrent/storage_defs.hpp>
 #include <libtorrent/time.hpp>
+#include <libtorrent/version.hpp>
 #include <libtorrent/write_resume_data.hpp>
 
 #ifdef QBT_USES_LIBTORRENT2
@@ -328,12 +329,21 @@ TorrentImpl::TorrentImpl(SessionImpl *session, const lt::torrent_handle &nativeH
     , m_downloadLimit(cleanLimitValue(m_ltAddTorrentParams.download_limit))
     , m_uploadLimit(cleanLimitValue(m_ltAddTorrentParams.upload_limit))
 {
+#if LIBTORRENT_VERSION_NUM >= 20100
+    if (m_ltAddTorrentParams.creation_date > 0)
+        m_creationDate = QDateTime::fromSecsSinceEpoch(m_ltAddTorrentParams.creation_date);
+    m_creator = QString::fromStdString(m_ltAddTorrentParams.created_by);
+    m_comment = QString::fromStdString(m_ltAddTorrentParams.comment);
+#endif
+
     if (m_ltAddTorrentParams.ti)
     {
+#if LIBTORRENT_VERSION_NUM < 20100
         if (const std::time_t creationDate = m_ltAddTorrentParams.ti->creation_date(); creationDate > 0)
             m_creationDate = QDateTime::fromSecsSinceEpoch(creationDate);
         m_creator = QString::fromStdString(m_ltAddTorrentParams.ti->creator());
         m_comment = QString::fromStdString(m_ltAddTorrentParams.ti->comment());
+#endif
 
         // Initialize it only if torrent is added with metadata.
         // Otherwise it should be initialized in "Metadata received" handler.
@@ -861,7 +871,11 @@ bool TorrentImpl::connectPeer(const PeerAddress &peerAddress)
 
 bool TorrentImpl::needSaveResumeData() const
 {
+#if LIBTORRENT_VERSION_NUM >= 20100
+    return (m_nativeStatus.need_save_resume_data != lt::resume_data_flags_t {});
+#else
     return m_nativeStatus.need_save_resume;
+#endif
 }
 
 void TorrentImpl::requestResumeData(const lt::resume_data_flags_t flags)
@@ -876,13 +890,20 @@ void TorrentImpl::deferredRequestResumeData()
 {
     if (!m_deferredRequestResumeDataInvoked)
     {
-        QMetaObject::invokeMethod(this, [this]
-        {
-            requestResumeData((m_maintenanceJob == MaintenanceJob::HandleMetadata)
-                    ? lt::torrent_handle::save_info_dict : lt::resume_data_flags_t());
-        }, Qt::QueuedConnection);
+        const lt::resume_data_flags_t flags = ((m_maintenanceJob == MaintenanceJob::HandleMetadata)
+                ? lt::torrent_handle::save_info_dict : lt::resume_data_flags_t());
 
-        m_deferredRequestResumeDataInvoked = true;
+        if (m_session->isSavingResumeData())
+        {
+            // During shutdown we poll libtorrent alerts in a blocking loop and
+            // posted Qt metacalls won't be processed.
+            requestResumeData(flags);
+        }
+        else
+        {
+            QMetaObject::invokeMethod(this, [this, flags] { requestResumeData(flags); }, Qt::QueuedConnection);
+            m_deferredRequestResumeDataInvoked = true;
+        }
     }
 }
 
@@ -2105,7 +2126,7 @@ void TorrentImpl::handleTorrentChecked()
             }
         }
 
-        if (m_nativeStatus.need_save_resume)
+        if (needSaveResumeData())
             deferredRequestResumeData();
 
         m_session->handleTorrentChecked(this);
