@@ -97,6 +97,7 @@
 #include "base/version.h"
 #include "bandwidthscheduler.h"
 #include "bencoderesumedatastorage.h"
+#include "common.h"
 #include "customstorage.h"
 #include "dbresumedatastorage.h"
 #include "downloadpriority.h"
@@ -141,6 +142,122 @@ namespace
 #else
         return torrentInfo.files();
 #endif
+    }
+
+    Path makeUserPathFromActual(const Path &path)
+    {
+        Path userPath = path.removedExtension(QB_EXT);
+        const Path parentPath = userPath.parentPath();
+        if (parentPath.filename() == UNWANTED_FOLDER_NAME)
+            userPath = parentPath.parentPath() / Path(userPath.filename());
+        return userPath;
+    }
+
+    Path restoreRootForLegacyRenamedPath(const Path &expectedPath, const Path &actualPath
+            , const TorrentContentLayout contentLayout)
+    {
+        if ((contentLayout == TorrentContentLayout::NoSubfolder) || actualPath.isAbsolute())
+            return actualPath;
+
+        PathList expectedPathList {expectedPath};
+        const Path expectedRootFolder = Path::findRootFolder(expectedPathList);
+        if (expectedRootFolder.isEmpty())
+            return actualPath;
+
+        if (actualPath.rootItem() == expectedRootFolder)
+            return actualPath;
+
+        Path::stripRootFolder(expectedPathList);
+        const Path expectedPathWithoutRoot = expectedPathList.at(0);
+        if (makeUserPathFromActual(actualPath) == makeUserPathFromActual(expectedPathWithoutRoot))
+            return (expectedRootFolder / actualPath);
+
+        return actualPath;
+    }
+
+    bool pathExistsOrIncompleteVariant(const Path &path);
+
+    void normalizeLegacyRenamedFiles(lt::add_torrent_params &params, const PathList &expectedPaths
+            , const QList<lt::file_index_t> &nativeIndexes, const TorrentContentLayout contentLayout)
+    {
+        if (params.renamed_files.empty() || (contentLayout == TorrentContentLayout::NoSubfolder))
+            return;
+
+        Q_ASSERT(expectedPaths.size() == nativeIndexes.size());
+        const qsizetype filesCount = std::min(expectedPaths.size(), nativeIndexes.size());
+        for (qsizetype i = 0; i < filesCount; ++i)
+        {
+            if (const auto it = params.renamed_files.find(nativeIndexes[i]); it != params.renamed_files.end())
+            {
+                const Path actualPath {it->second};
+                Path normalizedPath = restoreRootForLegacyRenamedPath(expectedPaths[i], actualPath, contentLayout);
+
+                if ((normalizedPath == actualPath) && !actualPath.isAbsolute())
+                {
+                    PathList expectedPathList {expectedPaths[i]};
+                    const Path expectedRootFolder = Path::findRootFolder(expectedPathList);
+                    if (!expectedRootFolder.isEmpty())
+                    {
+                        const Path rootedPath = expectedRootFolder / actualPath;
+                        const Path savePath {params.save_path};
+                        if (!savePath.isEmpty())
+                        {
+                            const Path actualPathAbs = savePath / actualPath;
+                            const Path rootedPathAbs = savePath / rootedPath;
+                            if (!pathExistsOrIncompleteVariant(actualPathAbs) && pathExistsOrIncompleteVariant(rootedPathAbs))
+                                normalizedPath = rootedPath;
+                        }
+                    }
+                }
+
+                if (normalizedPath != actualPath)
+                    it->second = normalizedPath.toString().toStdString();
+            }
+        }
+    }
+
+    bool pathExistsOrIncompleteVariant(const Path &path)
+    {
+        if (path.exists())
+            return true;
+
+        if (!path.hasExtension(QB_EXT) && ((path + QB_EXT).exists()))
+            return true;
+
+        if (path.hasExtension(QB_EXT) && path.removedExtension(QB_EXT).exists())
+            return true;
+
+        return false;
+    }
+
+    void repairStaleRenamedFilesUsingFilesystem(lt::add_torrent_params &params, const PathList &expectedPaths
+            , const QList<lt::file_index_t> &nativeIndexes)
+    {
+        if (params.renamed_files.empty())
+            return;
+
+        const Path savePath {params.save_path};
+        if (savePath.isEmpty())
+            return;
+
+        Q_ASSERT(expectedPaths.size() == nativeIndexes.size());
+        const qsizetype filesCount = std::min(expectedPaths.size(), nativeIndexes.size());
+        for (qsizetype i = 0; i < filesCount; ++i)
+        {
+            if (const auto it = params.renamed_files.find(nativeIndexes[i]); it != params.renamed_files.end())
+            {
+                const Path renamedPath {it->second};
+                const Path renamedPathAbs = renamedPath.isAbsolute() ? renamedPath : (savePath / renamedPath);
+                if (pathExistsOrIncompleteVariant(renamedPathAbs))
+                    continue;
+
+                const Path expectedPathAbs = expectedPaths[i].isAbsolute() ? expectedPaths[i] : (savePath / expectedPaths[i]);
+                if (!pathExistsOrIncompleteVariant(expectedPathAbs))
+                    continue;
+
+                it->second = expectedPaths[i].toString().toStdString();
+            }
+        }
     }
 
     void torrentQueuePositionUp(const lt::torrent_handle &handle)
@@ -1658,6 +1775,32 @@ void SessionImpl::processNextResumeData(ResumeSessionContext *context)
         return true;
     });
 
+    if (resumeData.ltAddTorrentParams.ti && resumeData.ltAddTorrentParams.ti->is_valid())
+    {
+        const TorrentInfo torrentInfo {*resumeData.ltAddTorrentParams.ti};
+        PathList filePaths = torrentInfo.filePaths();
+        if (resumeData.contentLayout != TorrentContentLayout::Original)
+        {
+            const Path originalRootFolder = Path::findRootFolder(filePaths);
+            const auto originalContentLayout = (originalRootFolder.isEmpty()
+                    ? TorrentContentLayout::NoSubfolder : TorrentContentLayout::Subfolder);
+            if (resumeData.contentLayout != originalContentLayout)
+            {
+                if (resumeData.contentLayout == TorrentContentLayout::NoSubfolder)
+                    Path::stripRootFolder(filePaths);
+                else
+                    Path::addRootFolder(filePaths, filePaths.at(0).removedExtension());
+            }
+        }
+
+        const auto previousRenamedFiles = resumeData.ltAddTorrentParams.renamed_files;
+        normalizeLegacyRenamedFiles(resumeData.ltAddTorrentParams, filePaths
+                , torrentInfo.nativeIndexes(), resumeData.contentLayout);
+        repairStaleRenamedFilesUsingFilesystem(resumeData.ltAddTorrentParams, filePaths
+                , torrentInfo.nativeIndexes());
+        needStore |= (resumeData.ltAddTorrentParams.renamed_files != previousRenamedFiles);
+    }
+
     resumeData.ltAddTorrentParams.userdata = LTClientData(new ExtensionData);
 #ifndef QBT_USES_LIBTORRENT2
     resumeData.ltAddTorrentParams.storage = customStorageConstructor;
@@ -2877,6 +3020,7 @@ bool SessionImpl::addTorrent_impl(const TorrentDescriptor &source, const AddTorr
         }
 
         const auto nativeIndexes = torrentInfo.nativeIndexes();
+        normalizeLegacyRenamedFiles(p, filePaths, nativeIndexes, loadTorrentParams.contentLayout);
 
         Q_ASSERT(p.file_priorities.empty());
         Q_ASSERT(addTorrentParams.filePriorities.isEmpty() || (addTorrentParams.filePriorities.size() == nativeIndexes.size()));

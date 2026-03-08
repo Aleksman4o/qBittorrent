@@ -120,6 +120,90 @@ namespace
 #endif
     }
 
+    Path makeUserPathFromActual(const Path &path)
+    {
+        Path userPath = path.removedExtension(QB_EXT);
+        const Path parentPath = userPath.parentPath();
+        if (parentPath.filename() == UNWANTED_FOLDER_NAME)
+            userPath = parentPath.parentPath() / Path(userPath.filename());
+        return userPath;
+    }
+
+    Path restoreRootForLegacyRenamedPath(const Path &expectedPath, const Path &actualPath
+            , const TorrentContentLayout contentLayout)
+    {
+        if ((contentLayout == TorrentContentLayout::NoSubfolder) || actualPath.isAbsolute())
+            return actualPath;
+
+        PathList expectedPathList {expectedPath};
+        const Path expectedRootFolder = Path::findRootFolder(expectedPathList);
+        if (expectedRootFolder.isEmpty())
+            return actualPath;
+
+        if (actualPath.rootItem() == expectedRootFolder)
+            return actualPath;
+
+        Path::stripRootFolder(expectedPathList);
+        const Path expectedPathWithoutRoot = expectedPathList.at(0);
+        if (makeUserPathFromActual(actualPath) == makeUserPathFromActual(expectedPathWithoutRoot))
+            return (expectedRootFolder / actualPath);
+
+        return actualPath;
+    }
+
+    bool pathExistsOrIncompleteVariant(const Path &path)
+    {
+        if (path.exists())
+            return true;
+
+        if (!path.hasExtension(QB_EXT) && ((path + QB_EXT).exists()))
+            return true;
+
+        if (path.hasExtension(QB_EXT) && path.removedExtension(QB_EXT).exists())
+            return true;
+
+        return false;
+    }
+
+    void normalizeLegacyRenamedFiles(lt::add_torrent_params &params, const PathList &expectedPaths
+            , const QList<lt::file_index_t> &nativeIndexes, const TorrentContentLayout contentLayout)
+    {
+        if (params.renamed_files.empty() || (contentLayout == TorrentContentLayout::NoSubfolder))
+            return;
+
+        Q_ASSERT(expectedPaths.size() == nativeIndexes.size());
+        const qsizetype filesCount = std::min(expectedPaths.size(), nativeIndexes.size());
+        for (qsizetype i = 0; i < filesCount; ++i)
+        {
+            if (const auto it = params.renamed_files.find(nativeIndexes[i]); it != params.renamed_files.end())
+            {
+                const Path actualPath {it->second};
+                Path normalizedPath = restoreRootForLegacyRenamedPath(expectedPaths[i], actualPath, contentLayout);
+
+                if ((normalizedPath == actualPath) && !actualPath.isAbsolute())
+                {
+                    PathList expectedPathList {expectedPaths[i]};
+                    const Path expectedRootFolder = Path::findRootFolder(expectedPathList);
+                    if (!expectedRootFolder.isEmpty())
+                    {
+                        const Path rootedPath = expectedRootFolder / actualPath;
+                        const Path savePath {params.save_path};
+                        if (!savePath.isEmpty())
+                        {
+                            const Path actualPathAbs = savePath / actualPath;
+                            const Path rootedPathAbs = savePath / rootedPath;
+                            if (!pathExistsOrIncompleteVariant(actualPathAbs) && pathExistsOrIncompleteVariant(rootedPathAbs))
+                                normalizedPath = rootedPath;
+                        }
+                    }
+                }
+
+                if (normalizedPath != actualPath)
+                    it->second = normalizedPath.toString().toStdString();
+            }
+        }
+    }
+
     lt::announce_entry makeNativeAnnounceEntry(const QString &url, const int tier)
     {
         lt::announce_entry entry {url.toStdString()};
@@ -378,6 +462,23 @@ TorrentImpl::TorrentImpl(SessionImpl *session, const lt::torrent_handle &nativeH
         // Initialize it only if torrent is added with metadata.
         // Otherwise it should be initialized in "Metadata received" handler.
         m_torrentInfo = TorrentInfo(*m_ltAddTorrentParams.ti);
+        PathList expectedPaths = m_torrentInfo.filePaths();
+        if (m_contentLayout != TorrentContentLayout::Original)
+        {
+            const Path originalRootFolder = Path::findRootFolder(expectedPaths);
+            const auto originalContentLayout = (originalRootFolder.isEmpty()
+                    ? TorrentContentLayout::NoSubfolder : TorrentContentLayout::Subfolder);
+            if (m_contentLayout != originalContentLayout)
+            {
+                if (m_contentLayout == TorrentContentLayout::NoSubfolder)
+                    Path::stripRootFolder(expectedPaths);
+                else
+                    Path::addRootFolder(expectedPaths, expectedPaths.at(0).removedExtension());
+            }
+        }
+
+        normalizeLegacyRenamedFiles(m_ltAddTorrentParams, expectedPaths
+                , m_torrentInfo.nativeIndexes(), m_contentLayout);
 
         Q_ASSERT(m_filePaths.isEmpty());
         Q_ASSERT(m_indexMap.isEmpty());
@@ -2254,9 +2355,8 @@ void TorrentImpl::handleSaveResumeData(lt::add_torrent_params params)
 
         const auto metadata = TorrentInfo(*m_ltAddTorrentParams.ti);
 
-        const auto &renamedFiles = m_ltAddTorrentParams.renamed_files;
         PathList filePaths = metadata.filePaths();
-        if (renamedFiles.empty() && (m_contentLayout != TorrentContentLayout::Original))
+        if (m_ltAddTorrentParams.renamed_files.empty() && (m_contentLayout != TorrentContentLayout::Original))
         {
             const Path originalRootFolder = Path::findRootFolder(filePaths);
             const auto originalContentLayout = (originalRootFolder.isEmpty()
@@ -2271,6 +2371,8 @@ void TorrentImpl::handleSaveResumeData(lt::add_torrent_params params)
         }
 
         const auto nativeIndexes = metadata.nativeIndexes();
+        normalizeLegacyRenamedFiles(m_ltAddTorrentParams, filePaths, nativeIndexes, m_contentLayout);
+        const auto &renamedFiles = m_ltAddTorrentParams.renamed_files;
         m_indexMap.reserve(filePaths.size());
         for (qsizetype i = 0; i < filePaths.size(); ++i)
         {
