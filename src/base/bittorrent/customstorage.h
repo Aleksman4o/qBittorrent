@@ -30,6 +30,7 @@
 
 #include <libtorrent/aux_/vector.hpp>
 #include <libtorrent/fwd.hpp>
+#include <libtorrent/version.hpp>
 
 #include <QString>
 
@@ -103,6 +104,9 @@ private:
     {
         Path savePath;
         lt::file_storage files;
+#if LIBTORRENT_VERSION_NUM >= 20100
+        lt::renamed_files renamedFiles;
+#endif
         lt::aux::vector<lt::download_priority_t, lt::file_index_t> filePriorities;
     };
     QHash<lt::storage_index_t, StorageData> m_storageData;
