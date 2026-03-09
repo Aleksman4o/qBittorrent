@@ -2117,16 +2117,8 @@ void TorrentImpl::handleTorrentChecked()
     {
         qDebug("\"%s\" have just finished checking.", qUtf8Printable(name()));
 
-        if (!m_hasMissingFiles)
+        const auto finishChecking = [this]
         {
-            if ((progress() < 1.0) && (wantedSize() > 0))
-                m_hasFinishedStatus = false;
-            else if (progress() == 1.0)
-                m_hasFinishedStatus = true;
-
-            adjustStorageLocation();
-            manageActualFilePaths();
-
             if (!isStopped())
             {
                 // torrent is internally paused using NativeTorrentExtension after files checked
@@ -2135,12 +2127,40 @@ void TorrentImpl::handleTorrentChecked()
                 if (m_operatingMode == TorrentOperatingMode::Forced)
                     m_nativeHandle.resume();
             }
+
+            if (needSaveResumeData())
+                deferredRequestResumeData();
+
+            m_session->handleTorrentChecked(this);
+        };
+
+        if (!m_hasMissingFiles)
+        {
+            if ((progress() < 1.0) && (wantedSize() > 0))
+                m_hasFinishedStatus = false;
+            else if (progress() == 1.0)
+                m_hasFinishedStatus = true;
+
+            const auto updateActualFilePaths = [this, finishChecking]
+            {
+                manageActualFilePaths();
+
+                if (!isMoveInProgress() && (m_renameCount == 0))
+                    finishChecking();
+                else
+                    m_moveFinishedTriggers.enqueue(finishChecking);
+            };
+
+            adjustStorageLocation();
+            if (isMoveInProgress())
+                m_moveFinishedTriggers.enqueue(updateActualFilePaths);
+            else
+                updateActualFilePaths();
+
+            return;
         }
 
-        if (needSaveResumeData())
-            deferredRequestResumeData();
-
-        m_session->handleTorrentChecked(this);
+        finishChecking();
     });
 }
 
