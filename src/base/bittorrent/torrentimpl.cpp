@@ -870,13 +870,7 @@ bool TorrentImpl::connectPeer(const PeerAddress &peerAddress)
 bool TorrentImpl::needSaveResumeData() const
 {
 #if LIBTORRENT_VERSION_NUM >= 20100
-    return static_cast<bool>(m_nativeStatus.need_save_resume_data
-        & (lt::torrent_handle::if_download_progress
-            | lt::torrent_handle::if_config_changed
-            | lt::torrent_handle::if_state_changed
-            | lt::torrent_handle::if_metadata_changed
-            // TODO: if_counters_changed can probably safely be removed
-            | lt::torrent_handle::if_counters_changed));
+    return (m_nativeStatus.need_save_resume_data != lt::resume_data_flags_t {});
 #else
     return m_nativeStatus.need_save_resume;
 #endif
@@ -894,13 +888,20 @@ void TorrentImpl::deferredRequestResumeData()
 {
     if (!m_deferredRequestResumeDataInvoked)
     {
-        QMetaObject::invokeMethod(this, [this]
-        {
-            requestResumeData((m_maintenanceJob == MaintenanceJob::HandleMetadata)
-                    ? lt::torrent_handle::save_info_dict : lt::resume_data_flags_t());
-        }, Qt::QueuedConnection);
+        const lt::resume_data_flags_t flags = ((m_maintenanceJob == MaintenanceJob::HandleMetadata)
+                ? lt::torrent_handle::save_info_dict : lt::resume_data_flags_t());
 
-        m_deferredRequestResumeDataInvoked = true;
+        if (m_session->isSavingResumeData())
+        {
+            // During shutdown we poll libtorrent alerts in a blocking loop and
+            // posted Qt metacalls won't be processed.
+            requestResumeData(flags);
+        }
+        else
+        {
+            QMetaObject::invokeMethod(this, [this, flags] { requestResumeData(flags); }, Qt::QueuedConnection);
+            m_deferredRequestResumeDataInvoked = true;
+        }
     }
 }
 
