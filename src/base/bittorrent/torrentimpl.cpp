@@ -2173,25 +2173,37 @@ void TorrentImpl::handleTorrentFinished()
 
     m_statusUpdatedTriggers.enqueue([this]()
     {
-        adjustStorageLocation();
-        manageActualFilePaths();
-
-        deferredRequestResumeData();
-
-        const bool recheckTorrentsOnCompletion = Preferences::instance()->recheckTorrentsOnCompletion();
-        if (recheckTorrentsOnCompletion && m_unchecked)
+        const auto finishHandling = [this]
         {
-            forceRecheck();
-        }
-        else
-        {
-            m_hasFinishedStatus = true;
+            deferredRequestResumeData();
 
-            if (isMoveInProgress() || (m_renameCount > 0))
-                m_moveFinishedTriggers.enqueue([this] { m_session->handleTorrentFinished(this); });
+            const bool recheckTorrentsOnCompletion = Preferences::instance()->recheckTorrentsOnCompletion();
+            if (recheckTorrentsOnCompletion && m_unchecked)
+            {
+                forceRecheck();
+            }
             else
+            {
+                m_hasFinishedStatus = true;
                 m_session->handleTorrentFinished(this);
-        }
+            }
+        };
+
+        const auto updateActualFilePaths = [this, finishHandling]
+        {
+            manageActualFilePaths();
+
+            if (!isMoveInProgress() && (m_renameCount == 0))
+                finishHandling();
+            else
+                m_moveFinishedTriggers.enqueue(finishHandling);
+        };
+
+        adjustStorageLocation();
+        if (isMoveInProgress())
+            m_moveFinishedTriggers.enqueue(updateActualFilePaths);
+        else
+            updateActualFilePaths();
     });
 }
 
