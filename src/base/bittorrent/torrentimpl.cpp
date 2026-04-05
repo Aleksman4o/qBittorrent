@@ -891,13 +891,20 @@ void TorrentImpl::deferredRequestResumeData()
 {
     if (!m_deferredRequestResumeDataInvoked)
     {
-        QMetaObject::invokeMethod(this, [this]
-        {
-            requestResumeData((m_maintenanceJob == MaintenanceJob::HandleMetadata)
-                    ? lt::torrent_handle::save_info_dict : lt::resume_data_flags_t());
-        }, Qt::QueuedConnection);
+        const lt::resume_data_flags_t flags = ((m_maintenanceJob == MaintenanceJob::HandleMetadata)
+                ? lt::torrent_handle::save_info_dict : lt::resume_data_flags_t());
 
-        m_deferredRequestResumeDataInvoked = true;
+        if (m_session->isSavingResumeData())
+        {
+            // During shutdown we poll libtorrent alerts in a blocking loop and
+            // posted Qt metacalls won't be processed.
+            requestResumeData(flags);
+        }
+        else
+        {
+            QMetaObject::invokeMethod(this, [this, flags] { requestResumeData(flags); }, Qt::QueuedConnection);
+            m_deferredRequestResumeDataInvoked = true;
+        }
     }
 }
 

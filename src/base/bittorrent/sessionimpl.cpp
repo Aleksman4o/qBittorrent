@@ -3250,6 +3250,8 @@ void SessionImpl::generateResumeData()
 // Called on exit
 void SessionImpl::saveResumeData()
 {
+    m_isSavingResumeData = true;
+
     for (TorrentImpl *torrent : asConst(m_torrents))
     {
         // When the session is terminated due to unrecoverable error
@@ -3300,6 +3302,13 @@ void SessionImpl::saveResumeData()
         if (hasWantedAlert)
             timer.start();
     }
+
+    m_isSavingResumeData = false;
+}
+
+bool SessionImpl::isSavingResumeData() const
+{
+    return m_isSavingResumeData;
 }
 
 void SessionImpl::saveTorrentsQueue()
