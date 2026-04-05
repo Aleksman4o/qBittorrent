@@ -502,6 +502,7 @@ namespace BitTorrent
         QString additionalTrackersURL() const override;
         void setAdditionalTrackersURL(const QString &url) override;
         QString additionalTrackersFromURL() const override;
+        bool isSavingResumeData() const;
 
     signals:
         void addTorrentAlertsReceived(qsizetype count);
@@ -790,6 +791,7 @@ namespace BitTorrent
         const bool m_wasPexEnabled = m_isPeXEnabled;
 
         int m_numResumeData = 0;
+        bool m_isSavingResumeData = false;
         QList<TrackerEntry> m_additionalTrackerEntries;
         QList<TrackerEntry> m_additionalTrackerEntriesFromURL;
         QList<QRegularExpression> m_excludedFileNamesRegExpList;
