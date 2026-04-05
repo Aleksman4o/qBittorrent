@@ -229,11 +229,9 @@ void CustomDiskIOThread::settings_updated()
 void CustomDiskIOThread::handleCompleteFiles(lt::storage_index_t storage, const Path &savePath)
 {
     const StorageData storageData = m_storageData[storage];
-#if LIBTORRENT_VERSION_NUM >= 20100
-    const lt::filenames fileNames {storageData.files, storageData.renamedFiles};
-    const auto &fileStorage = fileNames;
-#else
     const lt::file_storage &fileStorage = storageData.files;
+#if LIBTORRENT_VERSION_NUM >= 20100
+    const std::string savePathString = savePath.data().toStdString();
 #endif
     for (const lt::file_index_t fileIndex : fileStorage.file_range())
     {
@@ -244,10 +242,14 @@ void CustomDiskIOThread::handleCompleteFiles(lt::storage_index_t storage, const 
         // ignore pad files
         if (fileStorage.pad_file_at(fileIndex)) continue;
 
+#if LIBTORRENT_VERSION_NUM >= 20100
+        const Path incompleteFilePath {storageData.renamedFiles.file_path(fileStorage, fileIndex, savePathString)};
+#else
         const Path filePath {fileStorage.file_path(fileIndex)};
-        if (filePath.hasExtension(QB_EXT))
+        const Path incompleteFilePath = filePath.isAbsolute() ? filePath : (savePath / filePath);
+#endif
+        if (incompleteFilePath.hasExtension(QB_EXT))
         {
-            const Path incompleteFilePath = savePath / filePath;
             const Path completeFilePath = incompleteFilePath.removedExtension(QB_EXT);
             if (completeFilePath.exists())
             {
